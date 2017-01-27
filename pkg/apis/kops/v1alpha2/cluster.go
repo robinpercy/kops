@@ -155,6 +155,7 @@ type ClusterSpec struct {
 
 	// API field controls how the API is exposed outside the cluster
 	API *AccessSpec `json:"api,omitempty"`
+	GlobalCloudLabels map[string]string `json:"globalCloudLabels,omitempty"`
 }
 
 type AccessSpec struct {
