@@ -75,9 +75,7 @@ type CreateClusterOptions struct {
 	// Egress configuration - FOR TESTING ONLY
 	Egress string
 
-	GlobalCloudLabels string
-	MasterCloudLabels string
-	NodeCloudLabels string
+	CloudLabels []string
 }
 
 func (o *CreateClusterOptions) InitDefaults() {
@@ -162,9 +160,7 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().BoolVar(&options.Bastion, "bastion", options.Bastion, "Pass the --bastion flag to enable a bastion instance group. Only applies to private topology.")
 
 	// Allow custom tags from the CLI
-	cmd.Flags().StringVar(&options.GlobalCloudLabels, "global-cloud-labels", options.GlobalCloudLabels, "A list of KV pairs used to tag all kops-created resources (eg \"Owner=John Doe,Team=Some Team\").")
-	cmd.Flags().StringVar(&options.MasterCloudLabels, "master-cloud-labels", options.MasterCloudLabels, "A list of KV pairs used to tag the masters (eg \"Owner=John Doe,Team=Some Team\").")
-	cmd.Flags().StringVar(&options.NodeCloudLabels, "node-cloud-labels", options.NodeCloudLabels, "A list of KV pairs used to tag the nodes (eg \"Owner=John Doe,Team=Some Team\").")
+	cmd.Flags().StringSliceVar(&options.CloudLabels, "cloud-labels", options.CloudLabels, "A list of KV pairs used to tag all kops-created resources (eg \"Owner=John Doe,Team=Some Team\").")
 
 	return cmd
 }
@@ -279,21 +275,11 @@ func RunCreateCluster(f *util.Factory, out io.Writer, c *CreateClusterOptions) e
 	var nodes []*api.InstanceGroup
 	var instanceGroups []*api.InstanceGroup
 
-	globalCloudLabels, err := parseCloudLabels(c.GlobalCloudLabels)
+	cloudLabels, err := parseCloudLabels(c.CloudLabels)
 	if err != nil {
 		return fmt.Errorf("error parsing global cloud labels: %v", err)
 	}
-	cluster.Spec.GlobalCloudLabels = globalCloudLabels
-
-	masterCloudLabels, err := parseCloudLabels(c.MasterCloudLabels)
-	if err != nil {
-		return fmt.Errorf("error parsing master cloud labels: %v", err)
-	}
-
-	nodeCloudLabels, err := parseCloudLabels(c.NodeCloudLabels)
-	if err != nil {
-		return fmt.Errorf("error parsing node cloud labels: %v", err)
-	}
+	cluster.Spec.CloudLabels = cloudLabels
 
 	if c.MasterZones == "" {
 		if len(masters) == 0 {
@@ -306,7 +292,6 @@ func RunCreateCluster(f *util.Factory, out io.Writer, c *CreateClusterOptions) e
 				g.Spec.Subnets = []string{subnet.Name}
 				g.Spec.MinSize = fi.Int32(1)
 				g.Spec.MaxSize = fi.Int32(1)
-				g.Spec.CloudLabels = masterCloudLabels
 				g.ObjectMeta.Name = "master-" + subnet.Name // Subsequent masters (if we support that) could be <zone>-1, <zone>-2
 				instanceGroups = append(instanceGroups, g)
 				masters = append(masters, g)
@@ -324,7 +309,6 @@ func RunCreateCluster(f *util.Factory, out io.Writer, c *CreateClusterOptions) e
 				g.Spec.Subnets = []string{subnetName}
 				g.Spec.MinSize = fi.Int32(1)
 				g.Spec.MaxSize = fi.Int32(1)
-				g.Spec.CloudLabels = masterCloudLabels
 				g.ObjectMeta.Name = "master-" + subnetName
 				instanceGroups = append(instanceGroups, g)
 				masters = append(masters, g)
@@ -390,7 +374,6 @@ func RunCreateCluster(f *util.Factory, out io.Writer, c *CreateClusterOptions) e
 		g := &api.InstanceGroup{}
 		g.Spec.Role = api.InstanceGroupRoleNode
 		g.ObjectMeta.Name = "nodes"
-		g.Spec.CloudLabels = nodeCloudLabels
 		instanceGroups = append(instanceGroups, g)
 		nodes = append(nodes, g)
 	}
@@ -723,36 +706,20 @@ func supportsPrivateTopology(n *api.NetworkingSpec) bool {
 	return false
 }
 
-func parseCloudLabels (s string) (map[string]string, error) {
-	var buf bytes.Buffer
-	inQuote := false
+// parseCloudLabels takes a list of key=value records and parses them into a map. Nested '='s are supported via
+// quoted strings (eg [`foo="bar=baz"`] parses to map[string]string{"foo":"bar=baz"}.
+func parseCloudLabels (kvList []string) (map[string]string, error) {
 
-	// Replace commas with newlines while respecting quoted fields
-	for _, c := range s {
-		r := c
-		switch c {
-		case '"':
-			inQuote = !inQuote
-		case ',':
-			if !inQuote {
-				r = '\n'
-			}
-		}
-		buf.WriteRune(r)
-	}
-	if inQuote {
-		return nil, fmt.Errorf("invalid format in cloud labels, should not have an odd number of quotes.")
-	}
-
-	// Now that each record is on its own line, use encoding/csv to do the heavy lifting
-	r := csv.NewReader(&buf)
+	// Let the CSV library do the heavy-lifting of handling nested ='s
+	s := strings.Join(kvList, "\n")
+	r := csv.NewReader(strings.NewReader(s))
 	r.Comma = '='
 	r.FieldsPerRecord = 2
-	r.LazyQuotes = false // Lazy quotes would make the comma replacement step above more difficult
+	r.LazyQuotes = false
 	r.TrimLeadingSpace = true
 	kvPairs, err := r.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("error parsing cloud label after transform '%s': %v", buf.String(), err)
+		return nil, fmt.Errorf("error parsing cloud label after transform '%s': %v", s, err)
 	}
 
 	m := make(map[string]string, len(kvPairs))

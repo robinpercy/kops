@@ -77,7 +77,7 @@ func BuildCloud(cluster *api.Cluster) (fi.Cloud, error) {
 			}
 
 			cloudTags := map[string]string{awsup.TagClusterName: cluster.ObjectMeta.Name}
-			for k, v := range cluster.Spec.GlobalCloudLabels {
+			for k, v := range cluster.Spec.CloudLabels {
 				if _,exists := cloudTags[k]; !exists {
 					cloudTags[k] = v
 				}
