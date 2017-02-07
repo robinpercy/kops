@@ -16,7 +16,12 @@ limitations under the License.
 
 package kops
 
-import "k8s.io/kops/upup/pkg/fi/utils"
+import (
+	"fmt"
+	"github.com/blang/semver"
+	"k8s.io/kops/pkg/apis/kops/util"
+	"k8s.io/kops/upup/pkg/fi/utils"
+)
 
 const RoleLabelName = "kubernetes.io/role"
 const RoleMasterLabelValue = "master"
@@ -60,5 +65,37 @@ func BuildKubeletConfigSpec(cluster *Cluster, instanceGroup *InstanceGroup) (*Ku
 		utils.JsonMergeStruct(c, instanceGroup.Spec.Kubelet)
 	}
 
+	sv, err := util.ParseKubernetesVersion(cluster.Spec.KubernetesVersion)
+	if err != nil {
+		return c, fmt.Errorf("Failed to lookup kubernetes version: %v", err)
+	}
+
+	// --register-with-taints was available in the first 1.6.0 alpha, no need to rely on semver's pre/build ordering
+	sv.Pre = nil
+	sv.Build = nil
+	if sv.GTE(semver.Version{Major: 1, Minor: 6, Patch: 0, Pre: nil, Build: nil}) {
+		for i, t := range instanceGroup.Spec.Taints {
+			if c.Taints == nil {
+				c.Taints = make([]string, len(instanceGroup.Spec.Taints))
+			}
+			c.Taints[i] = t
+		}
+
+		// Enable scheduling since it can be controlled via taints.
+		// For pre-1.6.0 clusters, this is handled by tainter.go
+		registerSchedulable := true
+		c.RegisterSchedulable = &registerSchedulable
+
+	} else if len(instanceGroup.Spec.Taints) > 0 && !hasDefaultTaints(instanceGroup) {
+		return c, fmt.Errorf("User-specified taints are not supported before kubernetes version 1.6.0")
+	}
+
 	return c, nil
+}
+
+func hasDefaultTaints(instanceGroup *InstanceGroup) bool {
+	return instanceGroup.Spec.Role == InstanceGroupRoleMaster &&
+		len(instanceGroup.Spec.Taints) == 1 &&
+		instanceGroup.Spec.Taints[0] == TaintNoScheduleMaster
+
 }
